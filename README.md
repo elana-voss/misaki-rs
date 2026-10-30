@@ -40,7 +40,12 @@ let (phonemes, _tokens) = g2p.g2p("“I ask your favour,” she said.")?;
 
 The `espeak` feature, on by default, builds espeak-ng in. Its data folder `espeak-ng-data` is looked for in `PIPER_ESPEAKNG_DATA_DIRECTORY`, the current folder and the program's folder, else in an installed eSpeak NG. Without the feature, unknown words come out as `❓`, as misaki does without a fallback.
 
-On Windows with MSVC, espeak-rs-sys 0.1.9 needs two changes to build: `USE_ASYNC` off (there is no `pthread.h`) and `advapi32` linked. Patch it in your `Cargo.toml` with `[patch.crates-io]`.
+On Windows with MSVC, espeak-rs-sys 0.1.9 needs two changes to build: `USE_ASYNC` off (there is no `pthread.h`) and `advapi32` linked. This repository carries it so changed, in `espeak-rs-sys/`; patch it in your `Cargo.toml`:
+
+```toml
+[patch.crates-io]
+espeak-rs-sys = { git = "https://github.com/elana-voss/misaki-rs" }
+```
 
 ## What this fork changed
 

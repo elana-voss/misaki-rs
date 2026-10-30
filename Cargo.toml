@@ -7,6 +7,7 @@ description = "A self-contained, POS-aware Grapheme-to-Phoneme (G2P) engine for 
 homepage = "https://github.com/elana-voss/misaki-rs"
 repository = "https://github.com/elana-voss/misaki-rs"
 readme = "README.md"
+exclude = ["espeak-rs-sys"]
 
 [features]
 default = ["espeak"]
@@ -30,3 +31,7 @@ env_logger = "0.11"
 [[example]]
 name = "test_stress_fix"
 required-features = ["espeak"]
+
+# espeak-rs-sys 0.1.9 with its two fixes for Windows MSVC; a project using this crate patches it the same way
+[patch.crates-io]
+espeak-rs-sys = { path = "espeak-rs-sys" }
