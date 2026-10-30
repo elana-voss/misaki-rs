@@ -116,6 +116,32 @@ fn espeak_ipa(text: &str, voice: &str) -> Result<String, String> {
     Ok(clauses.into_iter().filter(|c| !c.is_empty()).collect::<Vec<_>>().join(" "))
 }
 
+/// phonemizer's default punctuation marks, which misaki's fallback keeps (`preserve_punctuation`).
+const MARKS: &str = ";:,.!?\u{a1}\u{bf}\u{2014}\u{2026}\"\u{ab}\u{bb}\u{201c}\u{201d}(){}[]";
+
+/// phonemizer's `preserve_punctuation`: the text between runs of marks is phonemized alone and
+/// each run (marks with the spaces around them) stays as it is; eSpeak reads `!` as "exclamation".
+#[cfg_attr(not(feature = "espeak"), allow(dead_code))]
+fn keep_marks<E>(text: &str, mut phonemize: impl FnMut(&str) -> Result<String, E>) -> Result<String, E> {
+    let is_mark = |c: char| MARKS.contains(c);
+    let mut out = String::new();
+    let mut i = 0;
+    while i < text.len() {
+        let Some(m) = text[i..].find(is_mark).map(|m| i + m) else {
+            out.push_str(&phonemize(&text[i..])?);
+            break;
+        };
+        let start = i + text[i..m].trim_end().len();
+        let end = text[m..].find(|c: char| !is_mark(c) && !c.is_whitespace()).map_or(text.len(), |e| m + e);
+        if start > i {
+            out.push_str(&phonemize(&text[i..start])?);
+        }
+        out.push_str(&text[start..end]);
+        i = end;
+    }
+    Ok(out)
+}
+
 #[cfg(feature = "espeak")]
 impl Fallback for EspeakFallback {
     fn phonemize(&self, word: &str) -> Result<String, FallbackError> {
@@ -123,11 +149,16 @@ impl Fallback for EspeakFallback {
             .lock()
             .map_err(|e| FallbackError::MutexPoisoned(format!("{:?}", e)))?;
         let voice = if self.british { "en" } else { "en-us" };
-        let ipa = espeak_ipa(word, voice).map_err(|error| FallbackError::Espeak { word: word.to_string(), error })?;
-        if ipa.is_empty() {
+        let mut any = false;
+        let ps = keep_marks(word, |w| {
+            let ipa = espeak_ipa(w, voice).map_err(|error| FallbackError::Espeak { word: word.to_string(), error })?;
+            any |= !ipa.is_empty();
+            Ok(self.convert_espeak_to_misaki(&ipa))
+        })?;
+        if !any {
             return Err(FallbackError::NoPhonemes { word: word.to_string() });
         }
-        Ok(self.convert_espeak_to_misaki(&ipa))
+        Ok(ps)
     }
 }
 
@@ -205,5 +236,21 @@ mod tests {
         // In IPA: US often starts with 'sk', GB often starts with 'ʃ'
         assert!(us_phonemes.contains("sk"), "US schedule usually has 'sk', got: {}", us_phonemes);
         assert!(gb_phonemes.contains("ʃ"), "GB schedule usually starts with 'ʃ', got: {}", gb_phonemes);
+    }
+}
+
+#[cfg(test)]
+mod mark_tests {
+    use super::*;
+
+    /// phonemizer's preserve_punctuation: the marks inside a word stay as marks, the words around
+    /// them are phonemized alone (eSpeak read `lad!—Here`'s `!` as "exclamation").
+    #[test]
+    fn marks_stay_between_the_words_phonemized_alone() {
+        let ph = |w: &str| -> Result<String, ()> { Ok(format!("<{w}>")) };
+        assert_eq!(keep_marks("lad!—Here", ph), Ok("<lad>!—<Here>".to_string()));
+        assert_eq!(keep_marks("You.—Come", ph), Ok("<You>.—<Come>".to_string()));
+        assert_eq!(keep_marks("Rabbits—“Pat", ph), Ok("<Rabbits>—“<Pat>".to_string()));
+        assert_eq!(keep_marks("Gor's", ph), Ok("<Gor's>".to_string()));
     }
 }
