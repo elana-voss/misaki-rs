@@ -216,8 +216,6 @@ dependencies = [
 [[package]]
 name = "espeak-rs-sys"
 version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eeb333310ae915d57961a6bbc67f53ef7b313a9ee80d393d55c0f27f1b65c848"
 dependencies = [
  "bindgen",
  "cmake",
@@ -407,6 +405,7 @@ version = "0.6.0"
 dependencies = [
  "env_logger",
  "espeak-rs",
+ "espeak-rs-sys",
  "fancy-regex",
  "language-tokenizer",
  "log",

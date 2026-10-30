@@ -173,3 +173,7 @@ the development corpora:
 That second one is the general lesson of this port: misaki's output depends on
 spaCy in more places than its source suggests, and the cheap approximation of
 any of them is wrong on text you did not test against.
+
+## With the eSpeak fallback
+
+The gate above runs with `fallback=None`. misaki's own use (Kokoro's `KPipeline`) has eSpeak read the words its dictionary lacks, so the fallback is matched too: espeak-ng is asked for ties (`^`, as phonemizer's `tie='^'`), the result goes through misaki's `E2M` table and its American or British replacements, and a group with an unknown piece goes to eSpeak whole (`should_fallback`). Checked against misaki 0.9.4 with its fallback on 3,592 novel passages: 99.9 % of words the same (98.0 % before); on their 44,489 distinct words, 12 differ. Tests: `cargo test --lib fallback`.

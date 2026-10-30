@@ -1,115 +1,52 @@
-# Misaki-RS
+# misaki-rs
 
-[![Crates.io](https://img.shields.io/crates/v/misaki-rs)](https://crates.io/crates/misaki-rs)
+English text to Kokoro's phonemes in Rust, with the same output as Python's [misaki](https://github.com/hexgrad/misaki) 0.9.4, the version Kokoro v1.0 was trained with.
 
+This is a fork of [MicheleYin/misaki-rs](https://github.com/MicheleYin/misaki-rs) built on [durgaprasadksv/misaki-rs](https://github.com/durgaprasadksv/misaki-rs). That fork matches misaki byte for byte without eSpeak (see [PARITY.md](PARITY.md)). This one also matches misaki's eSpeak fallback, which reads out words missing from the dictionary.
 
-**misaki-rs** is a self-contained, high-performance Rust port of the [Misaki](https://github.com/hexgrad/misaki) G2P (Grapheme-to-Phoneme) engine. 
+Measured against Python misaki 0.9.4 with its eSpeak fallback, on 3,592 passages from novels and on the 44,489 distinct words in them:
 
-It is specifically designed for use with TTS models like **Kokoro**, providing accurate Part-of-Speech aware phonemization for English text.
+| | Words the same |
+|---|---|
+| misaki-rs 0.6.0 (crates.io) | 40.8 % |
+| durgaprasadksv's fork | 98.0 % |
+| this fork | 99.9 % (53 words differ, mostly around dashes and quotes) |
 
-## Features
+## Install
 
-- **Self-Contained**: All lexicons, dictionaries, and Part-of-Speech tagger weights are embedded directly into the binary at compile time. No external resource files are required at runtime.
-- **POS-Aware Phonemization**: Uses an averaged perceptron tagger to handle heteronyms (words with different pronunciations based on context, e.g., *object* as a noun vs. verb).
-- **Multi-Dialect Support**: Supports both **US English** (en-us) and **British English** (en-gb).
-- **Morphological Stemming**: Intelligent handling of suffixes (plurals, past tense, continuous tense). Other rules may be added in the future. Currently those are:
-    -  s plural stemming
-    - ed past tense stemming
-    - ing continuous tense stemming
-- **Number Conversion**: Automatically converts numeric values into their spoken word equivalents.
-- **Optional espeak fallback** (feature `espeak`, enabled by default): For out-of-vocabulary words, use [espeak-ng](https://github.com/espeak-ng/espeak-ng) to produce phonemes. Disable with `default-features = false` for a smaller build with no system espeak dependency; unknown words will then be spelled letter-by-letter or marked as unknown.
+Paste this into Claude Code:
 
-
-## Why “spelling out” when espeak is disabled?
-
-When a word is not in the lexicon and no rule applies, the engine needs a fallback. With the `espeak` feature **enabled**, that fallback is espeak-ng: the word is sent to espeak and its IPA output is converted to the engine’s phoneme set. With the `espeak` feature **disabled**, there is no external fallback, so the engine falls back to **character-by-character spelling**: each letter is phonemized as its name (e.g. “B” → “bˈi”, “K” → “kˈe‍ɪ”). So for example “eBook” becomes the sequence of letter names (E, B, O, O, K) instead of the word “e-book”. Single-character tokens and unrecognized characters may be marked as unknown (❓) instead. This behavior is intentional so that builds without espeak still produce some output rather than failing.
-
-
-## Testing espeak
-
-To check that espeak fallback is working, phonemize an out-of-vocabulary word like `"eBook"` and assert it does not contain the unknown marker and is not spelled letter-by-letter:
-
-```bash
-cargo test test_ebook_with_espeak -- --nocapture
+```
+Add misaki-rs from https://github.com/elana-voss/misaki-rs to this Rust project and phonemize a test sentence with it.
 ```
 
-You should see output like `eBook (with espeak): ˈi bˈʊk.` (word-like). Without the espeak feature, the same word is spelled out: `cargo test test_ebook_without_espeak --no-default-features -- --nocapture` gives e.g. `eBook (without espeak): ˈiː  bˈi  ˈo‍ʊ  ˈo‍ʊ  kˈe‍ɪ` (E, B, O, O, K as letter names).
-
-
-## Installation
-
-Add this to your `Cargo.toml`:
+Or by hand, in `Cargo.toml`:
 
 ```toml
-[dependencies]
-misaki-rs = "0.6.0"
+misaki-rs = { git = "https://github.com/elana-voss/misaki-rs" }
 ```
-
-**Optional: disable espeak fallback** (smaller build, no espeak-ng dependency):
-
-```toml
-[dependencies]
-misaki-rs = { version = "0.6.0", default-features = false }
-```
-
-To depend on misaki-rs without default features but still use espeak:
-
-```toml
-misaki-rs = { version = "0.6.0", default-features = false, features = ["espeak"] }
-```
-
-## Quick Start
 
 ```rust
-use misaki_rs::G2P;
+use misaki_rs::{G2P, Language};
 
-fn main() {
-    // Initialize for US English (false = US, true = GB)
-    let g2p = G2P::new(false); 
-    
-    let (phonemes, tokens) = g2p.g2p("Hello, world! 123");
-    println!("US Phonemes: {}", phonemes);
-    
-    // Initialize for British English
-    let g2p_gb = G2P::new(true);
-    let (phonemes_gb, _) = g2p_gb.g2p("The schedule is full.");
-    println!("GB Phonemes: {}", phonemes_gb);
-}
+let g2p = G2P::new(Language::EnglishUS);
+let (phonemes, _tokens) = g2p.g2p("“I ask your favour,” she said.")?;
+// “ˌI ˈæsk jʊɹ fˈAvəɹ,” ʃi sˈɛd.
 ```
 
-## Custom OOV fallback
+`Language::EnglishGB` gives British English. `G2P::with_fallback` takes your own `Fallback` for unknown words in place of eSpeak.
 
-If you want to override the default out-of-vocabulary behavior, inject your own fallback implementation by implementing the `Fallback` trait and passing it to `G2P::with_fallback`.
+## eSpeak
 
-```rust
-use misaki_rs::{Fallback, FallbackError, G2P, Language};
+The `espeak` feature, on by default, builds espeak-ng in. Its data folder `espeak-ng-data` is looked for in `PIPER_ESPEAKNG_DATA_DIRECTORY`, the current folder and the program's folder, else in an installed eSpeak NG. Without the feature, unknown words come out as `❓`, as misaki does without a fallback.
 
-struct CustomFallback;
+On Windows with MSVC, espeak-rs-sys 0.1.9 needs two changes to build: `USE_ASYNC` off (there is no `pthread.h`) and `advapi32` linked. Patch it in your `Cargo.toml` with `[patch.crates-io]`.
 
-impl Fallback for CustomFallback {
-    fn phonemize(&self, word: &str) -> Result<String, FallbackError> {
-        // Replace this with your own phoneme generation logic.
-        Ok(format!("custom:{word}"))
-    }
-}
+## What this fork changed
 
-fn main() {
-    let g2p = G2P::with_fallback(Language::EnglishUS, Some(Box::new(CustomFallback)));
-    let (phonemes, _) = g2p.g2p("qzxwv");
-    println!("{}", phonemes);
-}
-```
-
-This is useful when you want a custom pronunciation source, a dictionary lookup, or a second-pass rule engine for unknown words instead of the built-in `espeak` fallback.
-
-## Pronunciations
-
-The original misaki project had very few words and some were not pronunced correctly. Here I updated the original pronunciation dict to include more words and correct pronunciations using eSpeak.
-
-## Scope
-
-This repository aims to provide a lightweight and efficient alternative to ONNX-based phonemizers for Rust applications. It eliminates the need for external C++ dependencies or large model files by porting the logic and data into native Rust.
+- The eSpeak fallback asks espeak-ng for its phonemes with ties, as misaki does through phonemizer, and maps them to Kokoro's symbols with misaki's table. Before, the sounds stayed in eSpeak's form and every such word ended in a full stop.
+- A word that is partly unknown, like `Gor's`, goes to eSpeak whole, as misaki does. Before, eSpeak read `Gor` and the dictionary's `'s` was stuck on, giving `s` where misaki says `z`.
 
 ## License
 
-This project is based on the original Misaki library. See the original repository for licensing details regarding the underlying dictionary data.
+MIT. With the `espeak` feature the program includes espeak-ng, which is GPL-3.0. The dictionaries come from misaki (Apache-2.0).
