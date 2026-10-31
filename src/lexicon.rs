@@ -484,22 +484,21 @@ impl Lexicon {
             lower[..lower.len() - 3].to_string() + "e"
         } else if lower.len() > 5 {
             // Python regex: r'([bcdgklmnprstvxz])\1ing$|cking$'
-            let stem_candidate = &lower[..lower.len() - 4];
-            if self.is_known(stem_candidate, tag) {
-                // Check for doubled consonants or 'ck'
-                let chars: Vec<char> = stem_candidate.chars().collect();
-                if chars.len() >= 2 {
-                    let last = chars[chars.len() - 1];
-                    let second_last = chars[chars.len() - 2];
-                    if (last == second_last && "bcdgklmnprstvxz".contains(last))
-                        || (last == 'k' && second_last == 'c')
-                    {
-                        return Some((
-                            self.append_ing(stem_candidate)?,
-                            self.lookup(stem_candidate, tag, stress, ctx)?.1,
-                        ));
-                    }
-                }
+            // Our fork: the doubled letters are the word's, before "ing" ("scarring"), and the
+            // ending goes on the stem's phonemes. This read the stem's last two letters and appended
+            // "ɪŋ" to its spelling.
+            let chars: Vec<char> = lower.chars().collect();
+            if chars.len() < 6 {
+                return None;
+            }
+            let stem_candidate: &str = &chars[..chars.len() - 4].iter().collect::<String>();
+            let (last, second_last) = (chars[chars.len() - 4], chars[chars.len() - 5]);
+            if ((last == second_last && "bcdgklmnprstvxz".contains(last))
+                || (last == 'k' && second_last == 'c'))
+                && self.is_known(stem_candidate, tag)
+            {
+                let (stem_ps, rating) = self.lookup(stem_candidate, tag, stress, ctx)?;
+                return Some((self.append_ing(&stem_ps)?, rating));
             }
             return None;
         } else {
@@ -508,6 +507,106 @@ impl Lexicon {
 
         let (stem_ps, rating) = self.lookup(&stem, tag, stress, ctx)?;
         Some((self.append_ing(&stem_ps)?, rating))
+    }
+
+    /// Our fork: English forms misaki's stems miss, which it sent to eSpeak (misaki's Python did
+    /// the same): -ied and -ies on a y-stem, a doubled consonant before -ed or -ing, -er and -est,
+    /// -ly, -ness, -like, a prefix (over, under, out, fore, counter), and the variants -e
+    /// ("blonde"), -ical ("geometrical") and -ise ("stylised"). A stem is any word get_word answers,
+    /// so forms nest: "outfitted" is out + fit, doubled, + ed. Stems are lower case and shorter (or,
+    /// for -ise, without the variant), so it ends. Raise RULES in a user's code with each change.
+    pub fn stem_more(
+        &self,
+        word: &str,
+        tag: &str,
+        stress: Option<f64>,
+        ctx: Option<&TokenContext>,
+    ) -> Option<(String, i32)> {
+        let w = word.to_lowercase();
+        if !w.chars().all(|c| c.is_ascii_lowercase()) || w.len() < 5 {
+            return None;
+        }
+        let get = |s: &str| {
+            if s.len() >= 3 {
+                self.get_word(s, tag, stress, ctx)
+            } else {
+                None
+            }
+        };
+        let add = |s: &str, end: &str| get(s).map(|(ps, r)| (ps + end, r));
+        let n = w.len();
+        let b = w.as_bytes();
+        if let Some(s) = w.strip_suffix("ied") {
+            if let Some((ps, r)) = get(&format!("{s}y")) {
+                return Some((self.append_ed(&ps), r));
+            }
+        }
+        if let Some(s) = w.strip_suffix("ies") {
+            if let Some((ps, r)) = get(&format!("{s}y")) {
+                return Some((self.append_s(&ps), r));
+            }
+        }
+        for end in ["ed", "ing"] {
+            let k = n - end.len();
+            if w.ends_with(end) && k >= 4 && b[k - 1] == b[k - 2] && b"bdgklmnprtvz".contains(&b[k - 1]) {
+                if let Some((ps, r)) = get(&w[..k - 1]) {
+                    let ps = if end == "ed" { Some(self.append_ed(&ps)) } else { self.append_ing(&ps) };
+                    if let Some(ps) = ps {
+                        return Some((ps, r));
+                    }
+                }
+            }
+        }
+        for (end, sound) in [("er", "əɹ"), ("est", "əst")] {
+            if let Some(s) = w.strip_suffix(end) {
+                let i = s.strip_suffix('i').map(|s| format!("{s}y"));
+                for stem in [Some(s.to_string()), Some(format!("{s}e")), i].into_iter().flatten() {
+                    if let Some(found) = add(&stem, sound) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        for (end, sound) in [("ly", "li"), ("ness", "nəs")] {
+            if let Some(s) = w.strip_suffix(end) {
+                let i = s.strip_suffix('i').map(|s| format!("{s}y"));
+                // "dimensionally": the stem's l is the ending's
+                let sound = if end == "ly" && s.ends_with('l') { "i" } else { sound };
+                for stem in [Some(s.to_string()), i].into_iter().flatten() {
+                    if let Some(found) = add(&stem, sound) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        if let Some(s) = w.strip_suffix("like") {
+            if let Some(found) = add(s, "lˌIk") {
+                return Some(found);
+            }
+        }
+        for p in ["over", "under", "out", "fore", "counter"] {
+            if let Some(rest) = w.strip_prefix(p).filter(|r| r.len() >= 4) {
+                if let (Some((pp, _)), Some((rp, r))) = (get(p), get(rest)) {
+                    return Some((pp.replace('ˈ', "ˌ") + &rp, r));
+                }
+            }
+        }
+        if let Some(s) = w.strip_suffix('e').filter(|s| s.len() >= 4) {
+            if let Some(found) = get(s) {
+                return Some(found);
+            }
+        }
+        if let Some(s) = w.strip_suffix("ical") {
+            if let Some(found) = add(&format!("{s}ic"), "əl") {
+                return Some(found);
+            }
+        }
+        for end in ["ise", "ised", "ises", "ising", "iser", "isers", "isation", "isations"] {
+            if let Some(s) = w.strip_suffix(end) {
+                return get(&format!("{s}iz{}", &end[2..]));
+            }
+        }
+        None
     }
 
     pub fn get_special_case(
@@ -688,7 +787,8 @@ impl Lexicon {
             && (self.has(&wl)
                 || self.stem_s(&wl, tag, stress, ctx).is_some()
                 || self.stem_ed(&wl, tag, stress, ctx).is_some()
-                || self.stem_ing(&wl, tag, stress, ctx).is_some())
+                || self.stem_ing(&wl, tag, stress, ctx).is_some()
+                || self.stem_more(&wl, tag, stress, ctx).is_some())
         {
             current_word = &wl;
         }
@@ -734,6 +834,9 @@ impl Lexicon {
         // is always Some(0.5) and discarded an explicit stress.
         if let Some(result) = self.stem_ing(current_word, tag, stress.or(Some(0.5)), ctx) {
             return Some(result);
+        }
+        if current_word == wl {
+            return self.stem_more(current_word, tag, stress, ctx);
         }
 
         None
@@ -804,5 +907,64 @@ mod tests {
         let lexicon = Lexicon::new(Language::EnglishUS);
         assert_eq!(lexicon.golds.len(), data::load_us_gold().len());
         assert_eq!(lexicon.silvers.len(), data::load_us_silver().len());
+    }
+
+    fn word(lexicon: &Lexicon, word: &str) -> Option<String> {
+        lexicon.get_word(word, "NN", None, None).map(|(ps, _)| ps)
+    }
+
+    #[test]
+    fn ied_is_y_with_eds_sound() {
+        let lexicon = lexicon(&[("query", "kwˈɪɹi")]);
+        assert_eq!(word(&lexicon, "queried").as_deref(), Some("kwˈɪɹid"));
+        assert_eq!(word(&lexicon, "Queried").as_deref(), Some("kwˈɪɹid"));
+    }
+
+    #[test]
+    fn a_doubled_consonant_before_ed_or_ing_is_one() {
+        let lexicon = lexicon(&[("scar", "skˈɑɹ")]);
+        assert_eq!(word(&lexicon, "scarred").as_deref(), Some("skˈɑɹd"));
+        assert_eq!(word(&lexicon, "scarring").as_deref(), Some("skˈɑɹɪŋ"));
+    }
+
+    #[test]
+    fn er_and_est_compare() {
+        let lexicon = lexicon(&[("poor", "pˈʊɹ"), ("light", "lˈIt"), ("mere", "mˈɪɹ")]);
+        assert_eq!(word(&lexicon, "poorer").as_deref(), Some("pˈʊɹəɹ"));
+        assert_eq!(word(&lexicon, "lightest").as_deref(), Some("lˈItəst"));
+        assert_eq!(word(&lexicon, "merest").as_deref(), Some("mˈɪɹəst"));
+    }
+
+    #[test]
+    fn ly_ness_and_like_are_added() {
+        let lexicon = lexicon(&[("dimensional", "dəmˈɛnʃənəl"), ("utter", "ˈʌTəɹ"), ("lion", "lˈIən")]);
+        assert_eq!(word(&lexicon, "dimensionally").as_deref(), Some("dəmˈɛnʃənəli"));
+        assert_eq!(word(&lexicon, "utterness").as_deref(), Some("ˈʌTəɹnəs"));
+        assert_eq!(word(&lexicon, "lionlike").as_deref(), Some("lˈIənlˌIk"));
+    }
+
+    #[test]
+    fn a_prefix_before_a_word_takes_secondary_stress() {
+        let lexicon = lexicon(&[("out", "ˈWt"), ("fit", "fˈɪt")]);
+        assert_eq!(word(&lexicon, "outfitted").as_deref(), Some("ˌWtfˈɪɾᵻd"));
+    }
+
+    #[test]
+    fn a_final_e_is_a_variant() {
+        let lexicon = lexicon(&[("blond", "blˈɑnd")]);
+        assert_eq!(word(&lexicon, "blonde").as_deref(), Some("blˈɑnd"));
+    }
+
+    #[test]
+    fn ical_is_ic_with_al() {
+        let lexicon = lexicon(&[("geometric", "ʤˌiəmˈɛtɹɪk")]);
+        assert_eq!(word(&lexicon, "geometrical").as_deref(), Some("ʤˌiəmˈɛtɹɪkəl"));
+    }
+
+    #[test]
+    fn ise_is_ize() {
+        let lexicon = lexicon(&[("stylize", "stˈIlˌIz"), ("civilization", "sˌɪvələzˈAʃən")]);
+        assert_eq!(word(&lexicon, "stylised").as_deref(), Some("stˈIlˌIzd"));
+        assert_eq!(word(&lexicon, "civilisations").as_deref(), Some("sˌɪvələzˈAʃənz"));
     }
 }
