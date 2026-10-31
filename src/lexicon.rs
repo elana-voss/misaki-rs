@@ -560,7 +560,8 @@ impl Lexicon {
         for (end, sound) in [("er", "əɹ"), ("est", "əst")] {
             if let Some(s) = w.strip_suffix(end) {
                 let i = s.strip_suffix('i').map(|s| format!("{s}y"));
-                for stem in [Some(s.to_string()), Some(format!("{s}e")), i].into_iter().flatten() {
+                // the stem with its e first: whiter is white+er, not whit+er
+                for stem in [Some(format!("{s}e")), Some(s.to_string()), i].into_iter().flatten() {
                     if let Some(found) = add(&stem, sound) {
                         return Some(found);
                     }
@@ -929,10 +930,12 @@ mod tests {
 
     #[test]
     fn er_and_est_compare() {
+        let whit = lexicon(&[("whit", "wˈɪt"), ("white", "wˈIt")]);
         let lexicon = lexicon(&[("poor", "pˈʊɹ"), ("light", "lˈIt"), ("mere", "mˈɪɹ")]);
         assert_eq!(word(&lexicon, "poorer").as_deref(), Some("pˈʊɹəɹ"));
         assert_eq!(word(&lexicon, "lightest").as_deref(), Some("lˈItəst"));
         assert_eq!(word(&lexicon, "merest").as_deref(), Some("mˈɪɹəst"));
+        assert_eq!(word(&whit, "whiter").as_deref(), Some("wˈItəɹ"));
     }
 
     #[test]
