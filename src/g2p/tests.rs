@@ -427,3 +427,29 @@ fn test_kokoros_long_text() {
     let (p, _) = g2p.g2p(&long_text).unwrap();
     assert!(!p.is_empty());
 }
+
+/// Records each word misaki gives the fallback.
+struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl Fallback for Recorder {
+    fn phonemize(&self, word: &str) -> Result<String, FallbackError> {
+        self.0.lock().unwrap().push(word.to_string());
+        Ok("zz".to_string())
+    }
+}
+
+fn sent(text: &str) -> Vec<String> {
+    let got = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let g2p = G2P::with_fallback(Language::EnglishUS, Some(Box::new(Recorder(got.clone()))));
+    g2p.g2p(text).unwrap();
+    let v = got.lock().unwrap().clone();
+    v
+}
+
+#[test]
+fn test_fallback_gets_no_contraction_piece_nor_words_joined_by_a_dash() {
+    let text = "The moral is—‘Be good.’ Fetch it, lad!—Here. You can't—I won’t; she couldn’t.";
+    assert_eq!(sent(text), Vec::<String>::new());
+    assert_eq!(sent("Fetch it, Talena!—Here."), ["Talena"]);
+    assert_eq!(sent("Gor’s moons"), ["Gor’s"]);
+}

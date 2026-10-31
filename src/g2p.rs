@@ -14,7 +14,11 @@ use std::collections::HashMap;
 
 mod links;
 mod numbers;
+mod spans;
 mod tokens;
+
+/// misaki's SUBTOKEN_JUNKS: a piece made only of these says nothing.
+const SUBTOKEN_JUNKS: &str = "',-._\u{2018}\u{2019}/";
 pub use links::{LinkFeature, LinkMarker};
 
 #[derive(Error, Debug)]
@@ -334,9 +338,15 @@ impl G2P {
         // five" and not "five hundred fifty five".
         let head_groups = Self::group_by_adjacency(&tokens);
         let mut is_head: Vec<bool> = vec![false; tokens.len()];
+        // a piece of a word of several pieces ("ca" of "can't"): misaki gives the fallback only the
+        // whole word, in the group pass below, never a piece of it
+        let mut in_group: Vec<bool> = vec![false; tokens.len()];
         for g in &head_groups {
             if g.start < is_head.len() {
                 is_head[g.start] = true;
+            }
+            if g.len() > 1 {
+                in_group[g.clone()].fill(true);
             }
         }
 
@@ -541,7 +551,7 @@ impl G2P {
                     if word.chars().count() > 1 {
                         // Unknown multi-character word - use fallback
                         let mut handled = false;
-                        if let Some(ref fallback) = self.fallback {
+                        if let (Some(fallback), false) = (&self.fallback, in_group[i]) {
                             match fallback.phonemize(&word) {
                                 Ok(ps) => {
                                     tokens[i].phonemes = Some(ps);
@@ -662,7 +672,6 @@ impl G2P {
         // characters are ignored. `five-storied` is all-alpha once `-` is
         // dropped, so it joins tight: fˌIv + stˈɔɹid -> fˌIvstˈɔɹid.
         {
-            const SUBTOKEN_JUNKS: &str = "',-._\u{2018}\u{2019}/";
             let groups = Self::group_by_adjacency(&tokens);
             if groups.len() != tokens.len() {
                 let mut merged: Vec<MToken> = Vec::with_capacity(groups.len());
@@ -786,73 +795,7 @@ impl G2P {
                         }
                     }
 
-                    let n = g.len();
-                    let mut res: Vec<Option<String>> = vec![None; n];
-                    let mut left = 0usize;
-                    let mut right = n;
-                    let mut should_fallback = false;
-                    while left < right {
-                        // misaki only merges a span none of whose members has
-                        // resolved yet.
-                        let free = res[left..right].iter().all(|r| r.is_none());
-                        let hit = if free {
-                            let sub = &tokens[g.start + left..g.start + right];
-                            let (t, tg, _) = Self::merge_text_tag(sub);
-                            let k = Self::normalize_lookup(&t);
-                            let st = if k == k.to_lowercase() {
-                                None
-                            } else if k == k.to_uppercase() {
-                                Some(self.lexicon.cap_stresses.1)
-                            } else {
-                                Some(self.lexicon.cap_stresses.0)
-                            };
-                            // the context at the SPAN's own left edge, not the
-                            // group's: misaki carries a rolling ctx through its
-                            // loop, so the inner `the` of `out-of-the-way` sees
-                            // what follows IT (`way`, a consonant -> ðə) and not
-                            // what follows the whole word.
-                            self.lexicon
-                                .get_word(&k, &tg, st, Some(&contexts[g.start + left]))
-                                .map(|(ps, _)| ps)
-                        } else {
-                            None
-                        };
-                        if let Some(ps) = hit {
-                            res[left] = Some(ps);
-                            for k in left + 1..right {
-                                res[k] = Some(String::new());
-                            }
-                            right = left;
-                            left = 0;
-                        } else if left + 1 < right {
-                            left += 1;
-                        } else {
-                            right -= 1;
-                            if res[right].is_none() {
-                                let t = &tokens[g.start + right].text;
-                                if !t.is_empty() && t.chars().all(|c| SUBTOKEN_JUNKS.contains(c)) {
-                                    res[right] = Some(String::new());
-                                } else if self.fallback.is_some() {
-                                    should_fallback = true;
-                                    break;
-                                }
-                            }
-                            left = 0;
-                        }
-                    }
-                    // With a fallback, misaki gives the WHOLE word to it as soon
-                    // as one piece stays unknown (`should_fallback`), so `Gor's`
-                    // is eSpeak's ɡˈɔɹz and not eSpeak's `Gor` stitched to the
-                    // lexicon's `'s`. Without one, anything still unresolved
-                    // stays unresolved: merge_tokens substitutes `unk` for None,
-                    // and the stitched path below assembles whatever `res` holds.
-                    let whole: Option<String> = match (&self.fallback, should_fallback) {
-                        (Some(fallback), true) => match fallback.phonemize(&text) {
-                            Err(FallbackError::NoPhonemes { .. }) => None,
-                            other => Some(other?),
-                        },
-                        _ => None,
-                    };
+                    let (res, whole) = self.spans(&tokens, g.clone(), &contexts, &text)?;
 
                     let phonemes = whole.or_else(|| {
                         // misaki's `resolve_tokens` rebalances stress across the
