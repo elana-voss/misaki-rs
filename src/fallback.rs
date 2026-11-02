@@ -162,6 +162,34 @@ impl Fallback for EspeakFallback {
     }
 }
 
+/// misaki 1.0's `EspeakG2P`, as the German voice was trained: eSpeak's IPA for a whole text in `voice`,
+/// clause by clause with the punctuation kept, turned into the voice's symbols. No dictionary in front.
+#[cfg(feature = "espeak")]
+pub fn espeak_g2p(text: &str, voice: &str) -> Result<String, FallbackError> {
+    let _lock = ESPEAK_MUTEX
+        .lock()
+        .map_err(|e| FallbackError::MutexPoisoned(format!("{:?}", e)))?;
+    let text = text.replace('«', "“").replace('»', "”").replace('(', "«").replace(')', "»");
+    let ipa = keep_marks(&text, |w| {
+        espeak_ipa(w, voice).map_err(|error| FallbackError::Espeak { word: w.to_string(), error })
+    })?;
+    Ok(g2p_symbols(&ipa))
+}
+
+/// `EspeakG2P`'s table; what ties and hyphens remain it drops.
+#[cfg_attr(not(feature = "espeak"), allow(dead_code))]
+fn g2p_symbols(ipa: &str) -> String {
+    const E2M: [(&str, &str); 11] = [
+        ("a^ɪ", "I"), ("a^ʊ", "W"), ("d^z", "ʣ"), ("d^ʒ", "ʤ"), ("e^ɪ", "A"), ("o^ʊ", "O"),
+        ("ə^ʊ", "Q"), ("s^s", "S"), ("t^s", "ʦ"), ("t^ʃ", "ʧ"), ("ɔ^ɪ", "Y"),
+    ];
+    let mut ps = ipa.trim().to_string();
+    for (old, new) in E2M {
+        ps = ps.replace(old, new);
+    }
+    ps.replace(['^', '-'], "")
+}
+
 #[cfg(all(test, feature = "espeak"))]
 mod tests {
     use super::*;
@@ -242,6 +270,20 @@ mod tests {
 #[cfg(test)]
 mod mark_tests {
     use super::*;
+
+    /// misaki's `EspeakG2P` table: ties to single symbols; a leftover tie and a hyphen go.
+    #[test]
+    fn g2p_symbols_as_misaki_1_0() {
+        assert_eq!(g2p_symbols("a^ɪn t^sa^ɪt-bɔ^ɪ ɔ^ø"), "In ʦItbY ɔø");
+    }
+
+    /// The German voice's way: phonemes for a whole sentence, the marks kept, a parenthesis in angles.
+    #[test]
+    fn espeak_g2p_says_a_german_sentence() {
+        let got = espeak_g2p("Die Zeit (kurz), ja.", "de").unwrap();
+        assert!(got.contains('ʦ') && got.contains("«") && got.contains("»,") && got.ends_with('.'), "{got}");
+        assert!(!got.contains('^'), "{got}");
+    }
 
     /// phonemizer's preserve_punctuation: the marks inside a word stay as marks, the words around
     /// them are phonemized alone (eSpeak read `lad!—Here`'s `!` as "exclamation").
